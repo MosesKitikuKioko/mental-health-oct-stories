@@ -1,0 +1,430 @@
+---
+title: "Kenya Mental Health"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    social: ["menu"]
+    source_code: "https://github.com/MosesKitikuKioko/Kenya-Mental-Health-Status/"
+    theme: united
+runtime: shiny
+---
+
+```{r echo=FALSE, fig.height=6, fig.width=12, message=FALSE, warning=FALSE}
+#clear the working directory
+rm(list = ls(all = T))
+# install.packages("XML", type = "binary")
+
+
+#set working directory
+# setwd("E:/CcHUB Workflows/R Codes/Data Stories/mental health")
+
+
+#get the packages if missing and load them
+pkgs<-c("flexdashboard", 'tidyverse', 'lubridate', 'plotly','readxl','openxlsx','janitor', 'shiny', "rio", "sf", "tmap", "classInt", "geodata", "raster", "googledrive", 'googlesheets4')
+
+
+
+#install missing packages 
+miss_pkgs <- pkgs[!pkgs %in% installed.packages()[,1]]
+
+if(length(miss_pkgs>0)){
+  install.packages(miss_pkgs,dependencies = T) 
+}
+
+#loading the packages
+invisible(lapply(pkgs,library,character.only=T))
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, paged.print=FALSE}
+#deauthenticate 
+googlesheets4::gs4_deauth()
+
+#read data
+# kenya_df <- readr::read_csv("mental illness kenya dataset.csv") %>%
+base_url = "https://docs.google.com/spreadsheets/d/1Pohf-9cwbkCMbxXMTfX22JAOAKgcr-XnRZJAkdRJoZw/edit?usp=sharing"
+kenya_df <- googlesheets4::read_sheet(base_url,
+                                   sheet = "mental illness kenya dataset",
+                                   range = "A:H") %>% 
+  dplyr::mutate(gender = factor(gender, 
+                                levels = c('Male', 'Female'), 
+                                labels = c(1,2)), 
+                gender = factor(gender, 
+                                levels = c(1,2), 
+                                labels = c("Male", "Female")), 
+                `age group` = factor(`age group`, 
+                                     levels = c("0-9 years","10-19 years","20-24 years","25-29 years","30-34 years","35-39 years","40-44 years","45-49 years",
+                                                "50-54 years", "55+ years"), 
+                                     labels = c(1,2,3,4,5,6,7,8,9,10)), 
+                `age group` = factor(`age group`, 
+                                     labels = c("0-9 years","10-19 years","20-24 years","25-29 years","30-34 years","35-39 years","40-44 years","45-49 years",
+                                                "50-54 years", "55+ years"), 
+                                     levels = c(1,2,3,4,5,6,7,8,9,10)), 
+                `mental illness` = factor(`mental illness`, 
+                                          levels = c("Anxiety disorders","Autism spectrum disorders","Bipolar disorder","Depressive disorders", 
+                                                     "Eating disorders","Substance use disorders"),
+                                          labels = c(1,2,3,4,5,6)), 
+                `mental illness` = factor(`mental illness`, 
+                                          labels = c("Anxiety disorders","Autism spectrum disorders","Bipolar disorder","Depressive disorders", 
+                                                     "Eating disorders","Substance use disorders"),
+                                          levels = c(1,2,3,4,5,6)), 
+                year = as.Date(paste(year, "01-01", sep = "-")), 
+                location = str_replace_all(location,  "((?<=[a-z])[A-Z]|[A-Z](?=[a-z]))",  " \\1"), 
+                location = str_trim(str_squish(str_replace_all(location,"-", " ")))) %>% 
+  dplyr::arrange_at(c("year", "measure", 'mental illness', 'age group', 'location', 'gender'))
+
+
+
+#merge the data
+df = kenya_df %>% 
+  base::rbind(kenya_df %>% 
+                dplyr::mutate(gender = 'Both') %>% 
+                dplyr::group_by(location, measure, gender,`age group`, `mental illness`, year) %>% 
+                dplyr::summarise(percent = mean(percent, na.rm = T), 
+                                 number = sum(number, na.rm = T))) %>% 
+  dplyr::arrange_at(c("year", "measure", 'mental illness', 'age group', 'location', 'gender'))
+
+
+#Kenya shapefile
+# st_read("kenya shapefile/gadm41_KEN_1.json")
+# kenya_shp = sf::st_read("kenya shapefile/gadm41_KEN_1.json", quiet = TRUE) %>%
+kenya_shp = gadm(country="KEN", level=1, path=tempdir()) %>% 
+  sf::st_as_sf() %>% 
+  sf::st_cast("MULTIPOLYGON") %>% 
+  dplyr::select(location = NAME_1,  geometry) %>%
+  dplyr::mutate(location = str_replace_all(location,  "((?<=[a-z])[A-Z]|[A-Z](?=[a-z]))",  " \\1"),
+                location = str_trim(str_squish(str_replace_all(location, "-", " "))))
+
+
+country_map = kenya_shp %>% 
+  dplyr::left_join(df %>% 
+                     dplyr::group_by(year,location, `mental illness`, gender) %>% 
+                     dplyr::summarise(percent = mean(percent, na.rm = TRUE), 
+                                      number = round(mean(number, na.rm = TRUE))), by = c('location')) %>% 
+    tidyr::drop_na()
+```
+
+
+
+Spatial Representation {data-navmenu="Status"}
+===============================================================================
+
+## column {.sidebar data-width="350"}
+
+```{r message=FALSE, warning=FALSE}
+inputPanel(
+  #get the date change 
+  shiny::dateRangeInput('selected_year_2', 
+                        label = "Select Range of Years (btn Jan 2009 to Jan 2019)", 
+                        start = "2009-01-01", 
+                        end = "2019-12-31", 
+                        min = "2009-01-01", 
+                        max = "2019-12-31"), 
+  
+  #select the mental illness category
+  selectInput(inputId = "mental_illness_cat_2", 
+              label = "Choose Mental Illness Category", 
+              multiple = F,
+              selected = c('Substance use disorders'),
+              choices = unique(country_map$`mental illness`)),
+  
+  #select the gender
+  selectInput(inputId = "gender",
+              label = "Choose Gender",
+              selected = c('Both'),
+              choices = unique(country_map$gender)))
+```
+
+## column
+
+### Spatial Map
+```{r}
+
+renderTmap({
+  
+  data = kenya_shp %>% 
+    dplyr::left_join(df %>% 
+                       # dplyr::filter(input$selected_year_2[1], year <= input$selected_year_2[2]) %>% 
+                       dplyr::group_by(year,location, `mental illness`, gender) %>% 
+                       dplyr::summarise(percent = mean(percent, na.rm = TRUE), 
+                                        `Total Number: `  = round(mean(number, na.rm = TRUE))), by = c('location')) %>% 
+
+    tidyr::drop_na() %>% 
+    dplyr::filter(`mental illness` %in% input$mental_illness_cat_2,
+                  gender %in% input$gender,
+                  # location %in% input$county_2,
+                  year >= input$selected_year_2[1], year <= input$selected_year_2[2])
+  
+  #classification
+  classification <-classIntervals(data$`Total Number: `,n=5,style ="quantile")
+
+  #quantile class intervals
+  breaks = round(classification$brks)
+  
+  #add interactivity 
+  tmap_mode("view")
+
+
+  #plot the map
+  #plot the map
+  tm_shape(data) +
+  tm_polygons("Total Number: ",   title = "Total Number Classification", palette = "Reds", style ="quantile", breaks = breaks) +
+  tm_layout(legend.title.size = 0.5, legend.outside =  TRUE, frame = FALSE) +
+  tm_text("location",size = 0.7)+
+  tmap::tmap_options(check.and.fix = TRUE)+
+  tm_basemap(c(StreetMap = "OpenStreetMap"))
+  })
+
+```
+
+
+
+
+Trends Between Genders {data-navmenu="Status"}
+===============================================================================
+
+## column {.sidebar data-width="350"}
+
+```{r message=FALSE, warning=FALSE}
+inputPanel(
+  #get the date change 
+  shiny::dateRangeInput('selected_year', 
+                        label = "Select Range of Years (btn Jan 2009 to Jan 2019)", 
+                        start = "2009-01-01", 
+                        end = "2019-12-31", 
+                        min = "2009-01-01", 
+                        max = "2019-12-31"),
+  
+  #select the mental illness category
+  selectInput(inputId = "mental_illness_cat", 
+              label = "Choose Mental Illness Category", 
+              selected = c('Substance use disorders'),
+              multiple = F,
+              choices = unique(df$`mental illness`)),
+  #select the county
+  selectInput(inputId = "county",
+              label = "Choose County", 
+              selected = c("Nairobi"),
+              choices = unique(df$location)), 
+  #select the age group
+  selectInput(inputId = "age_group", 
+              label = "Choose Age Group", 
+              multiple = F,
+              selected = c('25-29 years'),
+              choices =  unique(df$`age group`)))
+```
+**Prevalence among Gender**
+
+```{r}
+shiny::renderText({
+  dat= df %>%
+  dplyr::filter(gender != "Both") %>% 
+  # dplyr::group_by(location,year,`age group`, gender) %>%
+  # dplyr::summarise(number = mean(number, na.rm = T)) %>%
+  dplyr::filter(location %in% input$county,
+                `age group` %in% input$age_group,
+                year >= input$selected_year[1], year <= input$selected_year[2])
+  
+  male_p = with(dat, shapiro.test(number[gender == "Male"]))$p.value
+  female_p = with(dat, shapiro.test(number[gender == "Female"]))$p.value
+  var_test <- var.test(number ~ gender, data = dat)$p.value
+  res_test = as.numeric(wilcox.test(number ~ gender, data = dat,exact = FALSE)$p.value)
+  
+#   if (male_p > 0.05 & female_p > 0.05 & var_test > 0.05) {
+#   res_test = t.test(number ~ gender, data = dat, var.equal = TRUE)$p.value
+# 
+# } else {
+# res_test = wilcox.test(number ~ gender, data = dat,exact = FALSE)$p.value
+# }
+  res_label = ifelse(res_test < 0.05, paste("The Wilcoxon signed-rank showed that prevalence of ", str_to_lower(input$mental_illness_cat),"among men
+                                             within", str_to_lower(input$age_group), " in", input$county ,"county was significant. Therefore we have statistically
+                                             significant evidence at alpha = 0.05, to show that the prevalence among men was different from the Female counterparts",
+                                             "(p.value = ",res_test,")"),
+                     paste("The Wilcoxon signed-rank showed that prevalence of ", str_to_lower(input$mental_illness_cat),"among men
+                                             within", str_to_lower(input$age_group), " in", input$county ,"county was not significant. Therefore we do not have
+                                             statistically significant evidence at alpha =0.05, to show that the prevalence among men was different from the Female
+                           counterparts", "(p.value = ",res_test,")"))
+  print(res_label)
+})
+```
+
+
+**Prevalence among Age Groups**
+
+```{r}
+shiny::renderText({
+  dat = df %>%
+    dplyr::filter(gender != "Both") %>% 
+    # dplyr::group_by(location,year,`mental illness`, `age group`) %>% 
+    # dplyr::summarise(number = mean(number, na.rm = T)) %>% 
+    dplyr::filter(location %in% input$county,
+                  `mental illness` %in% input$mental_illness_cat,
+                  year >= input$selected_year[1], year <= input$selected_year[2])
+  
+  test_kruskal <- kruskal.test(number ~ `age group`, data = dat)$p.value
+  
+  res_label = ifelse(test_kruskal <= 0.05, paste("The Kruskal-Wallis test showed that we had a statistically significant evidence at alpha = 0.05 to show that there 
+                                                 was a difference in the prevalence of",str_to_lower(input$mental_illness_cat),"between age groups in ", 
+                                                 input$county, "county (p.value =",test_kruskal," )"),
+                     paste("The Kruskal-Wallis test showed that we did not have a statistically significant evidence at alpha = 0.05 to show that there 
+                                                 was a  difference in the prevalence of",str_to_lower(input$mental_illness_cat),"between age groups in ", 
+                           input$county, "county (p.value =",test_kruskal," )"))
+  
+  print(res_label)
+  #statistically significant evidence at α=0.05
+})
+```
+
+
+## column
+
+### Gender Trends
+
+```{r}
+renderPlotly({
+  dat = df %>% 
+    dplyr::filter(gender != "Both") %>% 
+    dplyr::filter(year >= input$selected_year[1], year <= input$selected_year[2]) %>% 
+    dplyr::group_by(year,location, `mental illness`, gender,`age group`) %>% 
+    dplyr::summarise(percent = mean(percent, na.rm = TRUE), 
+                   number = round(mean(number, na.rm = TRUE)))%>% 
+    tidyr::pivot_wider(id_cols = c(location, year, `age group`, `mental illness`), names_from = gender, values_from = number) %>% 
+    dplyr::filter(location %in% input$county, 
+                  `age group` %in% input$age_group,
+                  `mental illness` %in% input$mental_illness_cat)
+  
+  plotly::plot_ly(data = dat, 
+                  x = ~year, 
+                  y = ~Male, 
+                  type = "scatter", 
+                  mode ="markers",
+                  name = "Male",
+                  text = ~Male,
+                  marker = list(color = '#D85A7FFF'),
+                  line = list(color = '#D85A7FFF', width = 2),
+                  hovertemplate =  paste("<b>Gender</b>: %{Male}<br>",
+                                       "<b>Year</b>:  %{x}<br>",
+                                       "<b>Number</b>: %{y}<br>", 
+                                       "<br><extra></extra>"))%>% 
+    plotly::add_trace(y = ~Female, 
+                      mode = "markers",
+                      name = "Female",
+                      text = ~Female, 
+                      marker = list(color = '#AA96DA'),
+                      line = list(color = '#AA96DA', width = 2),
+                      hovertemplate =  paste("<b> Gender </b>: %{Female} </br>",
+                                           "<b>Year</b>:  %{x}<br>",
+                                           "<b> Number</b>: %{y}<br>", 
+                                           "<br><extra></extra>")) %>% 
+    #change the layout of the plot 
+    layout(title = '', 
+           yaxis = list(title = 'Mental Illness Numbers'),
+           xaxis = list(title = ""),
+           legend = list(orientation = "h",   # show entries horizontally
+                         xanchor = "center",  # use center of legend as anchor
+                         x = 0.5),
+           barmode = 'group')})
+```
+
+
+### Mental illness category
+
+```{r}
+renderPlotly({
+  dat= df %>% 
+    dplyr::filter(gender != "Both") %>% 
+    dplyr::filter(year >= input$selected_year[1], year <= input$selected_year[2]) %>% 
+    dplyr::group_by(location, `mental illness`, gender, `age group`) %>% 
+    dplyr::summarise(percent = mean(percent, na.rm = TRUE), 
+                   number = round(mean(number, na.rm = TRUE))) %>% 
+    tidyr::pivot_wider(id_cols = c(location, `mental illness`, `age group`), names_from = gender, values_from = number) %>% 
+    dplyr::filter(location %in% input$county,
+                  `age group` %in% input$age_group)
+  
+  plotly::plot_ly(dat, 
+                y = ~`mental illness`, 
+                x = ~Male, 
+                type = 'bar', 
+                name = 'Male',
+                text = ~Male,
+                textposition = 'auto',
+                marker = list(color = '#D85A7FFF',
+                              line = list(color = '#D85A7FFF', width = 1)),
+                hovertemplate =  paste("<b>Gender</b>:  Male <br>",
+                                       "<b>Prevalence</b>:  %{x}<br>",
+                                       "<br><extra></extra>")) %>% 
+  add_trace(x = ~Female, 
+            type = 'bar', 
+            name = 'Female',
+            text = ~Female,
+            textposition = 'auto',
+            marker = list(color = '#AA96DA',
+                          line = list(color = '#AA96DA', width = 1)),
+            hovertemplate =  paste("<b>Gender</b>:  Female<br>",
+                                   "<b>Prevalence</b>:  %{x}<br>", 
+                                   "<br><extra></extra>")) %>% 
+  #add layout
+  layout(title = '', 
+         yaxis = list(title = ''),
+         xaxis = list(title = ""),
+         legend = list(orientation = "h",   # show entries horizontally
+                       xanchor = "center",  # use center of legend as anchor
+                       x = 0.5),
+         barmode = 'group')
+})
+
+
+```
+
+## column
+
+
+### Age Group
+
+```{r}
+renderPlotly({
+  dat = df %>%
+    dplyr::filter(gender != "Both") %>% 
+    dplyr::filter(year >= input$selected_year[1], year <= input$selected_year[2]) %>% 
+    dplyr::group_by(location,`mental illness`,`age group`, gender) %>% 
+    dplyr::summarise(percent = mean(percent, na.rm = TRUE), 
+                     number = round(mean(number, na.rm = TRUE))) %>% 
+    tidyr::pivot_wider(id_cols = c(location,`mental illness`,`age group`), names_from = gender, values_from = number) %>%
+    dplyr::filter(location %in% input$county,
+                  `mental illness` %in% input$mental_illness_cat)
+  
+  plot_ly(data = dat, 
+        type = "funnel",
+        y = ~`age group`,
+        x = ~Male, 
+        name = "Male", 
+        # orientation = "h",
+        marker = list(color = '#D85A7FFF'),
+        # line = list(color = '#D85A7FFF', width = 2),
+        hovertemplate =  paste("<b>Gender</b>: Male<br>",
+                               "<b>Age Group:</b>  %{y}<br>",
+                               "<b>Total Number:</b> %{x}<br>", 
+                               "<br><extra></extra>")) %>% 
+  add_trace(type = "funnel",
+            name = "Female",
+            # orientation = "h", 
+            x = ~Female,
+            textposition = "inside",
+            textinfo = "value", 
+            marker = list(color = '#AA96DA'),
+            hovertemplate =  paste("<b>Gender:</b> Female<br>",
+                                   "<b>Age Group:</b> %{y} <br>",
+                                   "<b>Total Number:</b> %{x}<br>", 
+                                   "<br><extra></extra>")) %>% 
+  layout(title = '', 
+         yaxis = list(categoryarray = ~`age group`, title = ''),
+         xaxis = list(title = ""),
+         legend = list(orientation = "h",   # show entries horizontally
+                       xanchor = "center",  # use center of legend as anchor
+                       x = 0.5),
+         barmode = 'group')
+})
+```
+
+
+
